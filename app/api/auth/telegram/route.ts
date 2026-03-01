@@ -14,6 +14,7 @@ const BodySchema = z.object({
 export async function POST(req: NextRequest) {
   try {
     const body = BodySchema.parse(await req.json());
+
     const botToken = process.env.BOT_TOKEN;
     if (!botToken) {
       return NextResponse.json({ ok: false, error: "BOT_TOKEN is missing" }, { status: 500 });
@@ -23,15 +24,19 @@ export async function POST(req: NextRequest) {
 
     const tgId = BigInt(verified.user.id);
     const username = verified.user.username ?? null;
-    // Telegram WebApp user может содержать photo_url
-    // (в некоторых клиентах поле может отсутствовать)
-    // @ts-expect-error: runtime field
-    const photoUrl: string | null = (verified.user as any).photo_url ?? null;
+    const photoUrl = verified.user.photo_url ?? null;
 
     const user = await prisma.user.upsert({
       where: { tgId },
       update: { username, photoUrl },
       create: { tgId, username, photoUrl },
+      select: {
+        id: true,
+        tgId: true,
+        username: true,
+        photoUrl: true,
+        balanceStars: true,
+      },
     });
 
     const token = await signSessionToken(user.id);
