@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
         `Пополнение: ${pack.title}`,
         `Начисление ${pack.coins} SC Coin в StarsCase`,
         payload,
-        "",
+        // Для Stars (XTR) provider_token не используется, поэтому его НЕ передаём.
         "XTR",
         [{ label: pack.title, amount: pack.stars }],
         {
