@@ -1,0 +1,28 @@
+# dependencies
+node_modules
+.pnpm-store
+.next
+out
+dist
+
+# env
+.env
+.env.local
+.env.*.local
+
+# prisma
+prisma/dev.db
+prisma/*.db
+prisma/*.db-journal
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode
+.idea

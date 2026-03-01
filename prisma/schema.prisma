@@ -1,0 +1,109 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Rarity {
+  COMMON
+  RARE
+  EPIC
+  LEGENDARY
+}
+
+model User {
+  id          String           @id @default(cuid())
+  tgId        BigInt           @unique
+  username    String?
+  balanceCoin Int              @default(0)
+  createdAt   DateTime         @default(now())
+
+  inventory       Inventory[]
+  openings        Opening[]
+  payments        Payment[]
+  pendingPayments PendingPayment[]
+}
+
+model Case {
+  id          String     @id @default(cuid())
+  title       String
+  priceCoin   Int
+  isFree      Boolean    @default(false)
+  cooldownSec Int        @default(0)
+  isActive    Boolean    @default(true)
+
+  items    CaseItem[]
+  openings Opening[]
+}
+
+model CaseItem {
+  id          String   @id @default(cuid())
+  caseId      String
+  title       String
+  rarity      Rarity
+  weight      Int
+  rewardType  String
+  rewardValue Int
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+}
+
+model Inventory {
+  id     String @id @default(cuid())
+  userId String
+  title  String
+  rarity Rarity
+  qty    Int    @default(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, title, rarity], name: "user_title_rarity_unique")
+  @@index([userId])
+}
+
+model Opening {
+  id          String   @id @default(cuid())
+  userId      String
+  caseId      String
+  resultTitle String
+  rarity      Rarity
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([caseId, createdAt])
+}
+
+model Payment {
+  id               String   @id @default(cuid())
+  userId           String
+  amountStars      Int
+  coinsAdded       Int
+  telegramChargeId String   @unique
+  createdAt        DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model PendingPayment {
+  id         String   @id @default(cuid())
+  userId     String
+  payload    String   @unique
+  coinsToAdd Int
+  createdAt  DateTime @default(now())
+  consumed   Boolean  @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([consumed])
+}

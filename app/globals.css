@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0b0f19;
+  --card: rgba(255, 255, 255, 0.06);
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: white;
+}
+
+a {
+  color: inherit;
+}
