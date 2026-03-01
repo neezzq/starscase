@@ -14,19 +14,24 @@ bot.command("start", async (ctx) => {
 
 // Owner-only: grant stars to yourself
 bot.command("grantstars", async (ctx) => {
-  if (!OWNER_TG_ID || ctx.from?.id !== OWNER_TG_ID) return;
+  if (!OWNER_TG_ID || !ctx.from || ctx.from.id !== OWNER_TG_ID) return;
   const amount = Number((ctx.message?.text || "").split(" ")[1] || 0);
   if (!Number.isFinite(amount) || amount <= 0) {
     await ctx.reply("Использование: /grantstars 100");
     return;
   }
 
-  const user = await prisma.user.findUnique({ where: { tgId: String(ctx.from.id) } });
+  const tgId = BigInt(ctx.from.id);
+  const user = await prisma.user.findUnique({ where: { tgId } });
   if (!user) {
     await ctx.reply("Открой Mini App один раз (авторизуйся), потом повтори /grantstars.");
     return;
   }
-  await prisma.user.update({ where: { id: user.id }, data: { balanceStars: { increment: Math.floor(amount) } } });
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { balanceStars: { increment: Math.floor(amount) } },
+  });
   await ctx.reply(`✅ Начислено ${Math.floor(amount)} ⭐`);
 });
 
@@ -39,19 +44,25 @@ bot.on("message:successful_payment", async (ctx) => {
   const chargeId = sp.telegram_payment_charge_id;
   const payload = sp.invoice_payload;
 
+  // Stars use currency XTR
+  if (sp.currency !== "XTR") return;
+
   // Find pending by payload
   const pending = await prisma.pendingPayment.findUnique({ where: { payload } });
   if (!pending || pending.consumed) return;
 
   // Deduplicate by chargeId
   const exists = await prisma.payment.findUnique({ where: { telegramChargeId: chargeId } });
-  if (exists) return;
+  if (exists) {
+    await prisma.pendingPayment.update({ where: { id: pending.id }, data: { consumed: true } });
+    return;
+  }
 
   await prisma.$transaction(async (tx) => {
     await tx.payment.create({
       data: {
         userId: pending.userId,
-        amountStars: pending.starsToAdd,
+        amountStars: sp.total_amount,
         starsAdded: pending.starsToAdd,
         telegramChargeId: chargeId,
       },
