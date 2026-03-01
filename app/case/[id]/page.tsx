@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { motion, useMotionValue, animate } from "framer-motion";
 import { api } from "@/lib/api";
 import { useTelegram } from "@/lib/telegram/useTelegram";
@@ -30,9 +30,13 @@ function safeArray<T>(val: any): T[] {
   return [];
 }
 
-export default function CasePage({ params }: { params: { id: string } }) {
+export default function CasePage() {
   const tg = useTelegram();
   const router = useRouter();
+  const routeParams = useParams();
+  const idRaw = (routeParams as any)?.id;
+  const caseId = Array.isArray(idRaw) ? String(idRaw[0]) : String(idRaw ?? "");
+
 
   const [caseInfo, setCaseInfo] = useState<CaseDto | null>(null);
   const [items, setItems] = useState<ItemDto[]>([]);
@@ -47,9 +51,10 @@ export default function CasePage({ params }: { params: { id: string } }) {
     tg.expand();
 
     (async () => {
+      if (!caseId) return;
       // пытаемся получить детали кейса
       try {
-        const res = await api.get(`/api/cases/${params.id}`);
+        const res = await api.get(`/api/cases/${caseId}`);
         const c = res?.case || res;
         if (c?.id) setCaseInfo(c);
         const its = safeArray<ItemDto>(res);
@@ -59,7 +64,7 @@ export default function CasePage({ params }: { params: { id: string } }) {
         try {
           const res = await api.get("/api/cases");
           const list = Array.isArray(res) ? res : res?.cases ?? [];
-          const c = list.find((x: any) => String(x.id) === String(params.id));
+          const c = list.find((x: any) => String(x.id) === String(caseId));
           if (c) setCaseInfo(c);
         } catch {}
       }
@@ -89,7 +94,7 @@ export default function CasePage({ params }: { params: { id: string } }) {
         setStars(0);
       }
     })();
-  }, [tg, params.id]);
+  }, [tg, caseId]);
 
   const price = useMemo(() => caseInfo?.priceStars ?? 1, [caseInfo]);
   const title = useMemo(() => (caseInfo?.title ?? "KARABAS").toUpperCase(), [caseInfo]);
@@ -106,7 +111,7 @@ export default function CasePage({ params }: { params: { id: string } }) {
     if (busy) return;
     setBusy(true);
     try {
-      const res = await api.post("/api/cases/open", { caseId: params.id, qty, demo: false });
+      const res = await api.post("/api/cases/open", { caseId: caseId, qty, demo: false });
       setOpening(res?.results ?? res?.data?.results ?? res?.result ?? res);
     } finally {
       setBusy(false);
