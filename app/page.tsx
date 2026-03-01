@@ -1,10 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { motion, AnimatePresence } from "framer-motion";
-
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useTelegram } from "@/lib/telegram/useTelegram";
 
@@ -15,17 +13,10 @@ type CaseDto = {
   imageUrl: string | null;
 };
 
-type OpenResult = {
-  title: string;
-  rarity?: string;
-  imageUrl?: string | null;
-};
-
-function normalizeCases(raw: any): CaseDto[] {
-  if (Array.isArray(raw)) return raw as CaseDto[];
-  if (Array.isArray(raw?.cases)) return raw.cases as CaseDto[];
-  if (Array.isArray(raw?.data)) return raw.data as CaseDto[];
-  if (Array.isArray(raw?.data?.cases)) return raw.data.cases as CaseDto[];
+function safeArray<T>(val: any): T[] {
+  if (Array.isArray(val)) return val as T[];
+  if (val && Array.isArray(val.cases)) return val.cases as T[];
+  if (val && Array.isArray(val.data)) return val.data as T[];
   return [];
 }
 
@@ -33,11 +24,8 @@ export default function HomePage() {
   const tg = useTelegram();
   const router = useRouter();
 
-  const [cases, setCases] = useState<CaseDto[] | null>(null);
-  const [qty, setQty] = useState(1);
-  const [demo, setDemo] = useState(false);
-  const [opening, setOpening] = useState<OpenResult[] | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [cases, setCases] = useState<CaseDto[]>([]);
+  const [stars, setStars] = useState<number | null>(null);
 
   useEffect(() => {
     tg.ready();
@@ -45,161 +33,145 @@ export default function HomePage() {
 
     (async () => {
       try {
-        const raw = await api.get("/api/cases");
-        setCases(normalizeCases(raw));
+        const res = await api.get("/api/cases");
+        setCases(safeArray<CaseDto>(res));
       } catch {
         setCases([]);
       }
     })();
+
+    // баланс (если у тебя есть такой endpoint — подхватим; иначе просто покажем 0)
+    (async () => {
+      try {
+        const me = await api.get("/api/me");
+        const s =
+          (typeof me?.stars === "number" && me.stars) ||
+          (typeof me?.balanceStars === "number" && me.balanceStars) ||
+          (typeof me?.balance === "number" && me.balance) ||
+          0;
+        setStars(Number.isFinite(s) ? s : 0);
+      } catch {
+        setStars(0);
+      }
+    })();
   }, [tg]);
 
-  const karabas = useMemo(() => (cases && cases.length ? cases[0] : null), [cases]);
-
-  const open = async () => {
-    if (!karabas || busy) return;
-    setBusy(true);
-    try {
-      const res = await api.post("/api/cases/open", { caseId: karabas.id, qty, demo });
-      setOpening((res?.results ?? res) as OpenResult[]);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const title = useMemo(() => {
+    const u = (tg as any)?.user;
+    const name = u?.first_name || u?.username || "KARABAS";
+    return String(name).toUpperCase();
+  }, [tg]);
 
   return (
-    <div className="min-h-[100dvh] p-4 pb-24">
-      {/* Top bar */}
-      <div className="flex items-center justify-between gap-3 mb-4">
-        <div className="text-xl font-semibold">KARABAS CASE</div>
-
-        <button
-          onClick={() => router.push("/topup?open=1")}
-          className="shrink-0 rounded-2xl bg-white/10 border border-white/10 px-4 py-2 text-sm"
-        >
-          Пополнить ⭐
-        </button>
+    <div className="min-h-screen pb-24">
+      {/* фон */}
+      <div className="fixed inset-0 -z-10 bg-black">
+        <div className="absolute inset-0 opacity-70 bg-[radial-gradient(ellipse_at_top,rgba(59,130,246,0.20),transparent_55%),radial-gradient(ellipse_at_bottom,rgba(16,185,129,0.16),transparent_50%)]" />
+        <div className="absolute inset-0 opacity-25 bg-[radial-gradient(circle_at_20%_30%,rgba(255,255,255,0.10),transparent_18%),radial-gradient(circle_at_70%_40%,rgba(255,255,255,0.08),transparent_16%),radial-gradient(circle_at_40%_75%,rgba(255,255,255,0.08),transparent_14%)]" />
       </div>
 
-      {/* Content */}
-      {cases === null ? (
-        <div className="rounded-3xl bg-white/5 border border-white/10 p-4">
-          <div className="h-40 rounded-2xl bg-white/5" />
-          <div className="mt-4 h-4 w-40 rounded bg-white/10" />
-          <div className="mt-2 h-4 w-24 rounded bg-white/10" />
-          <div className="mt-4 h-12 rounded-2xl bg-white/10" />
-        </div>
-      ) : !karabas ? (
-        <div className="rounded-3xl bg-white/5 border border-white/10 p-4 text-sm opacity-80">
-          Кейс не найден. Проверь, что сид/база данных на проде заполнены и /api/cases возвращает список.
-        </div>
-      ) : (
-        <div className="rounded-3xl bg-white/5 border border-white/10 overflow-hidden">
-          {karabas.imageUrl ? (
-            <div className="relative w-full aspect-[16/9]">
-              <Image src={karabas.imageUrl} alt={karabas.title} fill className="object-cover" />
-            </div>
-          ) : (
-            <div className="w-full aspect-[16/9] bg-white/5" />
-          )}
+      <div className="px-5 pt-5">
+        {/* верхняя панель */}
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-sm font-semibold">
+            {title.slice(0, 1)}
+          </div>
 
-          <div className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="font-medium">{karabas.title}</div>
-              <div className="text-sm opacity-80">{karabas.priceStars} ⭐</div>
-            </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold tracking-wide truncate">{title}</div>
+            <div className="text-[11px] opacity-60 -mt-0.5 truncate">KARABAS CASE</div>
+          </div>
 
-            {/* qty selector */}
-            <div className="mt-4 flex items-center gap-2">
-              {[1, 2, 3, 4, 5].map((n) => (
-                <button
-                  key={n}
-                  onClick={() => setQty(n)}
-                  className={
-                    "px-3 py-2 rounded-xl border text-sm " +
-                    (qty === n
-                      ? "bg-white/15 border-white/25"
-                      : "bg-white/5 border-white/10")
-                  }
-                >
-                  x{n}
-                </button>
-              ))}
-
-              <label className="ml-auto flex items-center gap-2 text-sm opacity-80 select-none">
-                <input
-                  type="checkbox"
-                  checked={demo}
-                  onChange={(e) => setDemo(e.target.checked)}
-                />
-                demo
-              </label>
+          <div className="flex items-center gap-2">
+            <div className="rounded-full bg-white/5 border border-white/10 px-3 py-2 flex items-center gap-2">
+              <div className="text-xs opacity-70">⭐</div>
+              <div className="text-sm font-semibold tabular-nums">{stars ?? "—"}</div>
             </div>
 
             <button
-              onClick={open}
-              disabled={busy}
-              className="mt-4 w-full rounded-2xl bg-blue-600/80 hover:bg-blue-600 px-4 py-3 font-medium"
+              onClick={() => router.push("/topup?open=1")}
+              className="w-11 h-11 rounded-full bg-blue-600/90 active:scale-95 transition border border-white/10 flex items-center justify-center text-xl"
+              aria-label="Пополнить"
+              title="Пополнить"
             >
-              {busy ? "Открываем..." : demo ? `Открыть демо x${qty}` : `Открыть x${qty}`}
+              +
             </button>
           </div>
         </div>
-      )}
 
-      {/* Result modal */}
-      <AnimatePresence>
-        {opening && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/70 flex items-center justify-center p-6"
-            onClick={() => setOpening(null)}
+        {/* переключатель валют */}
+        <div className="mt-6 flex gap-3">
+          <button className="flex-1 h-12 rounded-2xl bg-white text-black font-semibold tracking-[0.2em] text-sm">
+            STARS
+          </button>
+          <button
+            className="flex-1 h-12 rounded-2xl bg-white/5 border border-white/10 text-white/40 font-semibold tracking-[0.2em] text-sm"
+            disabled
           >
-            <motion.div
-              initial={{ scale: 0.95, y: 16 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.97, y: 10 }}
-              className="w-full max-w-md rounded-3xl bg-neutral-900 border border-white/10 p-5"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="text-lg font-semibold mb-3">Результат</div>
+            SC COIN
+          </button>
+        </div>
 
-              <div className="grid gap-3">
-                {opening.map((r, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center gap-3 rounded-2xl bg-white/5 border border-white/10 p-3"
-                  >
-                    <div className="w-12 h-12 rounded-xl bg-white/5 overflow-hidden relative">
-                      {r.imageUrl ? (
-                        <Image
-                          src={r.imageUrl}
-                          alt={r.title}
-                          fill
-                          className="object-contain"
-                        />
-                      ) : null}
-                    </div>
+        {/* список кейсов */}
+        <div className="mt-7">
+          <div className="text-xs tracking-[0.35em] uppercase opacity-40 text-center">КЕЙСЫ</div>
 
-                    <div className="flex-1">
-                      <div className="font-medium">{r.title}</div>
-                      <div className="text-xs opacity-70">{String(r.rarity ?? "")}</div>
+          {cases.length === 0 ? (
+            <div className="mt-8 rounded-3xl bg-white/5 border border-white/10 p-6 text-center opacity-70">
+              Кейс не найден
+            </div>
+          ) : (
+            <div className={"mt-6 grid gap-5 " + (cases.length > 1 ? "grid-cols-2" : "grid-cols-1")}>
+              {cases.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => router.push(`/case/${c.id}`)}
+                  className="group rounded-[32px] bg-white/5 border border-white/10 overflow-hidden active:scale-[0.99] transition"
+                >
+                  <div className="relative w-full aspect-square">
+                    <Image
+                      src={c.imageUrl || "/assets/cases/karabas.png"}
+                      alt={c.title}
+                      fill
+                      className="object-contain p-5 drop-shadow-[0_20px_40px_rgba(0,0,0,0.55)]"
+                      priority={cases.length === 1}
+                    />
+                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_60%,rgba(255,255,255,0.12),transparent_55%)]" />
+                  </div>
+
+                  <div className="px-4 pb-4">
+                    <div className="mt-1 text-sm font-semibold tracking-wide truncate">{c.title}</div>
+
+                    <div className="mt-3">
+                      <div className="w-full rounded-2xl bg-white/5 border border-white/10 py-3 text-sm font-semibold">
+                        {c.priceStars} ⭐
+                      </div>
                     </div>
                   </div>
-                ))}
-              </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
 
-              <button
-                className="mt-5 w-full rounded-2xl bg-white/10 border border-white/10 px-4 py-3"
-                onClick={() => setOpening(null)}
-              >
-                Закрыть
-              </button>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* нижняя навигация */}
+      <div className="fixed bottom-0 left-0 right-0 px-5 pb-5">
+        <div className="rounded-[28px] bg-black/40 backdrop-blur-xl border border-white/10 h-16 flex items-center justify-around">
+          <button className="flex flex-col items-center gap-1 text-blue-400">
+            <span className="text-xl">⌂</span>
+            <span className="text-[10px] tracking-[0.25em] uppercase">Главная</span>
+          </button>
+          <button className="flex flex-col items-center gap-1 text-white/35" disabled>
+            <span className="text-xl">🏆</span>
+            <span className="text-[10px] tracking-[0.25em] uppercase">Конкурсы</span>
+          </button>
+          <button className="flex flex-col items-center gap-1 text-white/35" disabled>
+            <span className="text-xl">👤</span>
+            <span className="text-[10px] tracking-[0.25em] uppercase">Профиль</span>
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
