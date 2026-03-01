@@ -6,121 +6,213 @@ import { pickWeighted } from "@/lib/weighted";
 
 export const runtime = "nodejs";
 
-type Body = {
-  caseId: string;
-  qty?: number;       // 1..5
-  demo?: boolean;     // demo mode: no balance/inventory changes
-};
+function getClientIp(req: NextRequest): string {
+  const xff = req.headers.get("x-forwarded-for");
+  if (xff) return xff.split(",")[0]!.trim();
+  return req.headers.get("x-real-ip") ?? "unknown";
+}
+
+function clampInt(n: unknown, min: number, max: number, fallback: number): number {
+  const v = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  const i = Math.trunc(v);
+  return Math.min(max, Math.max(min, i));
+}
 
 export async function POST(req: NextRequest) {
-  const user = await getSessionUser(req);
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    const user = await getSessionUser(req);
+    if (!user) {
+      return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
+    }
 
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "0.0.0.0";
-  const rl = rateLimit(`open:${user.id}:${ip}`, 8, 30_000); // 8 opens / 30s
-  if (!rl.ok) return NextResponse.json({ error: "Rate limit" }, { status: 429 });
+    const ip = getClientIp(req);
+    const rl = rateLimit(`open:${user.id}:${ip}`, 8, 30_000);
+    if (!rl.ok) {
+      return NextResponse.json(
+        { ok: false, error: "RATE_LIMIT", retryAfterMs: rl.retryAfterMs },
+        { status: 429 }
+      );
+    }
 
-  const body = (await req.json()) as Body;
-  const qty = Math.max(1, Math.min(5, body.qty ?? 1));
-  const demo = !!body.demo;
+    const body = await req.json().catch(() => ({}));
+    const caseId = typeof body.caseId === "string" ? body.caseId : "";
+    const qty = clampInt(body.qty, 1, 5, 1);
+    const demo = Boolean(body.demo);
 
-  const theCase = await prisma.case.findUnique({
-    where: { id: body.caseId },
-    include: { items: true },
-  });
+    if (!caseId) {
+      return NextResponse.json({ ok: false, error: "caseId_required" }, { status: 400 });
+    }
 
-  if (!theCase || !theCase.isActive) {
-    return NextResponse.json({ error: "Case not found" }, { status: 404 });
-  }
-
-  if (!theCase.items.length) {
-    return NextResponse.json({ error: "Case items are not configured yet" }, { status: 400 });
-  }
-
-  // Demo: allow opening without touching DB (except Opening record if you want).
-  // Requirement: demo should be free and NOT show inventory changes.
-  // We'll still record openings with demo=true flag in result payload, but not write to DB to keep it clean.
-  if (demo) {
-   const results = Array.from({ length: qty }).map(() => {
-  const item = pickWeighted(theCase.items, (x) => x.weight);
-  return { title: item.title, rarity: item.rarity };
-});
-    return NextResponse.json({
-      ok: true,
-      demo: true,
-      spentStars: 0,
-      results,
+    const theCase = await prisma.case.findUnique({
+      where: { id: caseId },
+      select: {
+        id: true,
+        title: true,
+        isActive: true,
+        cooldownSec: true,
+        priceStars: true,
+        items: {
+          select: {
+            id: true,
+            title: true,
+            rarity: true,
+            weight: true,
+          },
+        },
+      },
     });
-  }
 
-  // Real open: transactional, charges stars, writes opening + inventory
-  const pricePer = theCase.isFree ? 0 : theCase.priceStars;
-  const totalPrice = pricePer * qty;
+    if (!theCase || !theCase.isActive) {
+      return NextResponse.json({ ok: false, error: "case_not_found" }, { status: 404 });
+    }
 
-  const now = new Date();
+    if (!theCase.items.length) {
+      return NextResponse.json({ ok: false, error: "case_has_no_items" }, { status: 400 });
+    }
 
-  const out = await prisma.$transaction(async (tx) => {
-    const dbUser = await tx.user.findUnique({ where: { id: user.id } });
-    if (!dbUser) throw new Error("User not found");
-
-    // Cooldown: for paid cases usually 0; for free could be enforced
-    if (theCase.cooldownSec > 0) {
-      const last = await tx.opening.findFirst({
+    // Cooldown applies only for real openings (not demo).
+    if (!demo && (theCase.cooldownSec ?? 0) > 0) {
+      const last = await prisma.opening.findFirst({
         where: { userId: user.id, caseId: theCase.id },
         orderBy: { createdAt: "desc" },
         select: { createdAt: true },
       });
+
       if (last) {
-        const nextAt = new Date(last.createdAt.getTime() + theCase.cooldownSec * 1000);
-        if (nextAt > now) {
-          return { error: "Cooldown", cooldownUntil: nextAt.toISOString() } as const;
+        const cdMs = (theCase.cooldownSec ?? 0) * 1000;
+        const nextAt = last.createdAt.getTime() + cdMs;
+        const now = Date.now();
+        if (now < nextAt) {
+          return NextResponse.json(
+            { ok: false, error: "COOLDOWN", retryAfterSec: Math.ceil((nextAt - now) / 1000) },
+            { status: 429 }
+          );
         }
       }
     }
 
-    if (dbUser.balanceStars < totalPrice) {
-      return { error: "Not enough stars" } as const;
-    }
+    const unitPrice = demo ? 0 : (theCase.priceStars ?? 0);
+    const totalPrice = demo ? 0 : unitPrice * qty;
 
-    // charge
-    if (totalPrice > 0) {
-      await tx.user.update({
-        where: { id: user.id },
-        data: { balanceStars: { decrement: totalPrice } },
+    const out = await prisma.$transaction(async (tx) => {
+      // Balance check + decrement for real openings
+      let balanceBefore = user.balanceStars;
+
+      if (!demo && totalPrice > 0) {
+        const dbUser = await tx.user.findUnique({
+          where: { id: user.id },
+          select: { balanceStars: true },
+        });
+        if (!dbUser) throw new Error("user_not_found");
+
+        balanceBefore = dbUser.balanceStars;
+
+        if (dbUser.balanceStars < totalPrice) {
+          return {
+            ok: false as const,
+            error: "INSUFFICIENT_STARS",
+            balanceStars: dbUser.balanceStars,
+          };
+        }
+
+        await tx.user.update({
+          where: { id: user.id },
+          data: { balanceStars: { decrement: totalPrice } },
+        });
+      }
+
+      // Generate results server-side
+      const results = Array.from({ length: qty }).map(() => {
+        const item = pickWeighted(theCase.items, (x) => x.weight);
+        // IMPORTANT: Prisma CaseItem does not have imageUrl (we map images on the client by title).
+        return { title: item.title, rarity: item.rarity };
       });
-    }
 
-    const results: Array<{ title: string; rarity: any; imageUrl: string | null }> = [];
+      if (demo) {
+        // Demo mode: no DB writes (no openings, no inventory changes).
+        return {
+          ok: true as const,
+          demo: true,
+          spentStars: 0,
+          balanceStars: balanceBefore,
+          results,
+        };
+      }
 
-    for (let i = 0; i < qty; i++) {
-      const item = pickWeighted(theCase.items, (x) => x.weight);
-      results.push({ title: item.title, rarity: item.rarity, imageUrl: item.imageUrl ?? null });
-
-      await tx.opening.create({
-        data: {
+      // Persist openings
+      await tx.opening.createMany({
+        data: results.map((r) => ({
           userId: user.id,
           caseId: theCase.id,
-          resultTitle: item.title,
-          rarity: item.rarity,
-        },
+          resultTitle: r.title,
+          rarity: r.rarity,
+        })),
       });
 
-      // Inventory adds
-      await tx.inventory.upsert({
-        where: {
-          userId_title_rarity: { userId: user.id, title: item.title, rarity: item.rarity },
-        },
-        update: { qty: { increment: 1 } },
-        create: { userId: user.id, title: item.title, rarity: item.rarity, qty: 1, imageUrl: item.imageUrl ?? null },
+      // Update inventory (group by title+rarity)
+      const byKey = new Map<string, { title: string; rarity: any; qty: number }>();
+      for (const r of results) {
+        const key = `${r.title}::${r.rarity}`;
+        const cur = byKey.get(key);
+        if (cur) cur.qty += 1;
+        else byKey.set(key, { title: r.title, rarity: r.rarity, qty: 1 });
+      }
+
+      for (const v of byKey.values()) {
+        const existing = await tx.inventory.findFirst({
+          where: { userId: user.id, title: v.title, rarity: v.rarity },
+          select: { id: true },
+        });
+
+        if (existing) {
+          await tx.inventory.update({
+            where: { id: existing.id },
+            data: { qty: { increment: v.qty } },
+          });
+        } else {
+          await tx.inventory.create({
+            data: {
+              userId: user.id,
+              title: v.title,
+              rarity: v.rarity,
+              qty: v.qty,
+            },
+          });
+        }
+      }
+
+      const updated = await tx.user.findUnique({
+        where: { id: user.id },
+        select: { balanceStars: true },
       });
+
+      return {
+        ok: true as const,
+        demo: false,
+        spentStars: totalPrice,
+        balanceStars: updated?.balanceStars ?? Math.max(0, balanceBefore - totalPrice),
+        results,
+      };
+    });
+
+    if (!out.ok) {
+      return NextResponse.json(
+        { ok: false, error: out.error, balanceStars: out.balanceStars },
+        { status: 402 }
+      );
     }
 
-    return { results, spentStars: totalPrice } as const;
-  });
-
-  if ("error" in out) {
-    return NextResponse.json(out, { status: out.error === "Cooldown" ? 429 : 400 });
+    return NextResponse.json({
+      ok: true,
+      caseId: theCase.id,
+      caseTitle: theCase.title,
+      qty,
+      unitPriceStars: theCase.priceStars ?? 0,
+      ...out,
+    });
+  } catch (e: any) {
+    console.error(e);
+    return NextResponse.json({ ok: false, error: "SERVER_ERROR" }, { status: 500 });
   }
-
-  return NextResponse.json({ ok: true, demo: false, ...out });
 }
