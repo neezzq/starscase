@@ -32,14 +32,10 @@ export async function POST(req: NextRequest) {
     const ip = getClientIp(req);
     const rl = rateLimit(`open:${userId}:${ip}`, { limit: 6, windowMs: 10_000 });
     if (!rl.ok) {
-      return NextResponse.json(
-        { ok: false, error: "RATE_LIMIT", retryAfterMs: rl.retryAfterMs },
-        { status: 429 }
-      );
+      return NextResponse.json({ ok: false, error: "RATE_LIMIT", retryAfterMs: rl.retryAfterMs }, { status: 429 });
     }
 
     const body = BodySchema.parse(await req.json());
-
     const now = new Date();
 
     const result = await prisma.$transaction(async (tx) => {
@@ -48,7 +44,7 @@ export async function POST(req: NextRequest) {
         select: {
           id: true,
           title: true,
-          priceCoin: true,
+          priceStars: true,
           isFree: true,
           cooldownSec: true,
           isActive: true,
@@ -76,17 +72,16 @@ export async function POST(req: NextRequest) {
       if (!c.items?.length) throw new Error("CASE_EMPTY");
 
       // Списываем стоимость (если не free)
-      if (!c.isFree && c.priceCoin > 0) {
+      if (!c.isFree && c.priceStars > 0) {
         const updated = await tx.user.updateMany({
-          where: { id: userId, balanceCoin: { gte: c.priceCoin } },
-          data: { balanceCoin: { decrement: c.priceCoin } },
+          where: { id: userId, balanceStars: { gte: c.priceStars } },
+          data: { balanceStars: { decrement: c.priceStars } },
         });
         if (updated.count !== 1) throw new Error("INSUFFICIENT_BALANCE");
       }
 
       const item = pickWeighted(c.items);
 
-      // Добавляем в инвентарь
       await tx.inventory.upsert({
         where: {
           user_title_rarity_unique: { userId, title: item.title, rarity: item.rarity },
@@ -95,11 +90,11 @@ export async function POST(req: NextRequest) {
         update: { qty: { increment: 1 } },
       });
 
-      // Доп. награда монетами (если rewardType=COIN)
-      if (item.rewardType === "COIN" && item.rewardValue > 0) {
+      // Доп. награда звёздами
+      if ((item.rewardType === "STARS" || item.rewardType === "COIN") && item.rewardValue > 0) {
         await tx.user.update({
           where: { id: userId },
-          data: { balanceCoin: { increment: item.rewardValue } },
+          data: { balanceStars: { increment: item.rewardValue } },
         });
       }
 
@@ -115,11 +110,11 @@ export async function POST(req: NextRequest) {
 
       const user = await tx.user.findUnique({
         where: { id: userId },
-        select: { balanceCoin: true },
+        select: { balanceStars: true },
       });
 
       return {
-        case: { id: c.id, title: c.title, priceCoin: c.priceCoin, isFree: c.isFree, cooldownSec: c.cooldownSec },
+        case: { id: c.id, title: c.title, priceStars: c.priceStars, isFree: c.isFree, cooldownSec: c.cooldownSec },
         result: {
           openingId: opening.id,
           title: item.title,
@@ -128,7 +123,7 @@ export async function POST(req: NextRequest) {
           rewardValue: item.rewardValue,
           createdAt: opening.createdAt,
         },
-        balanceCoin: user?.balanceCoin ?? 0,
+        balanceStars: user?.balanceStars ?? 0,
       };
     });
 
@@ -141,14 +136,15 @@ export async function POST(req: NextRequest) {
     }
 
     if (msg === "COOLDOWN") {
-      return NextResponse.json(
-        { ok: false, error: "COOLDOWN", remainingSec: e.remainingSec ?? null },
-        { status: 429 }
-      );
+      return NextResponse.json({ ok: false, error: "COOLDOWN", remainingSec: e.remainingSec ?? null }, { status: 429 });
     }
 
     if (msg === "INSUFFICIENT_BALANCE") {
       return NextResponse.json({ ok: false, error: "INSUFFICIENT_BALANCE" }, { status: 400 });
+    }
+
+    if (msg === "CASE_EMPTY") {
+      return NextResponse.json({ ok: false, error: "CASE_EMPTY" }, { status: 400 });
     }
 
     if (msg === "CASE_NOT_FOUND") {

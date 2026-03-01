@@ -12,9 +12,9 @@ function getWebAppUrl() {
 }
 
 bot.command("start", async (ctx) => {
-  const kb = new InlineKeyboard().webApp("Открыть кейсы", getWebAppUrl());
+  const kb = new InlineKeyboard().webApp("Открыть KARABAS CASE", getWebAppUrl());
   await ctx.reply(
-    "Добро пожаловать в *StarsCase* ✨\n\nОткрывай кейсы, собирай лут и пополняй баланс через Telegram Stars.",
+    "Добро пожаловать в *KARABAS CASE* ⭐\n\nНажми кнопку ниже, чтобы открыть Mini App.",
     { parse_mode: "Markdown", reply_markup: kb }
   );
 });
@@ -23,13 +23,11 @@ bot.on("pre_checkout_query", async (ctx) => {
   const payload = ctx.preCheckoutQuery.invoice_payload;
   const pending = await prisma.pendingPayment.findUnique({ where: { payload } });
 
-  // Разрешаем оплату только по известному payload и если он не потреблён
   if (!pending || pending.consumed) {
     await ctx.answerPreCheckoutQuery(false, "Платёж устарел или уже обработан. Создайте новый инвойс.");
     return;
   }
 
-  // Привязываем к пользователю (tgId)
   const fromTgId = BigInt(ctx.preCheckoutQuery.from.id);
   const user = await prisma.user.findUnique({ where: { id: pending.userId } });
   if (!user || user.tgId !== fromTgId) {
@@ -44,30 +42,21 @@ bot.on("message:successful_payment", async (ctx) => {
   const sp = ctx.message.successful_payment;
   const payload = sp.invoice_payload;
   const telegramChargeId = sp.telegram_payment_charge_id;
-  const amountStars = sp.total_amount; // для XTR: 1 = 1 Star
+  const amountStars = sp.total_amount; // XTR: 1 = 1 Star
   const currency = sp.currency;
 
-  if (currency !== "XTR") {
-    // Мы продаём только через Stars
-    return;
-  }
+  if (currency !== "XTR") return;
 
   const pending = await prisma.pendingPayment.findUnique({ where: { payload } });
-  if (!pending || pending.consumed) {
-    // Уже обработали или неизвестный payload
-    return;
-  }
+  if (!pending || pending.consumed) return;
 
-  // Дедупликация по telegram_payment_charge_id
   const existing = await prisma.payment.findUnique({ where: { telegramChargeId } });
   if (existing) {
-    // Отметим pending на всякий
     await prisma.pendingPayment.update({ where: { id: pending.id }, data: { consumed: true } });
     return;
   }
 
   await prisma.$transaction(async (tx) => {
-    // Повторная проверка в транзакции
     const freshPending = await tx.pendingPayment.findUnique({ where: { payload } });
     if (!freshPending || freshPending.consumed) return;
 
@@ -79,14 +68,14 @@ bot.on("message:successful_payment", async (ctx) => {
 
     await tx.user.update({
       where: { id: freshPending.userId },
-      data: { balanceCoin: { increment: freshPending.coinsToAdd } },
+      data: { balanceStars: { increment: freshPending.starsToAdd } },
     });
 
     await tx.payment.create({
       data: {
         userId: freshPending.userId,
         amountStars,
-        coinsAdded: freshPending.coinsToAdd,
+        starsAdded: freshPending.starsToAdd,
         telegramChargeId,
       },
     });
@@ -94,9 +83,7 @@ bot.on("message:successful_payment", async (ctx) => {
     await tx.pendingPayment.update({ where: { id: freshPending.id }, data: { consumed: true } });
   });
 
-  await ctx.reply(`✅ Оплата успешна! Начислено *${pending.coinsToAdd}* SC Coin.`, {
-    parse_mode: "Markdown",
-  });
+  await ctx.reply(`✅ Оплата успешна! Начислено *${pending.starsToAdd}* ⭐`, { parse_mode: "Markdown" });
 });
 
 bot.catch((err) => {

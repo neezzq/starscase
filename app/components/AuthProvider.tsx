@@ -4,7 +4,14 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 
 export type MeResponse = {
   ok: true;
-  user: { id: string; tgId: string; username: string | null; balanceCoin: number; createdAt: string };
+  user: {
+    id: string;
+    tgId: string;
+    username: string | null;
+    photoUrl: string | null;
+    balanceStars: number;
+    createdAt: string;
+  };
   openings: Array<{
     id: string;
     caseId: string;
@@ -31,7 +38,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 function getInitData(): string {
   // @ts-expect-error Telegram injected
-  const tg = typeof window !== "undefined" ? (window.Telegram?.WebApp ?? null) : null;
+  const tg = typeof window !== "undefined" ? window.Telegram?.WebApp ?? null : null;
   return tg?.initData || "";
 }
 
@@ -42,15 +49,15 @@ async function authWithTelegram(initData: string) {
     credentials: "include",
     body: JSON.stringify({ initData }),
   });
-  if (!res.ok) {
-    const j = await res.json().catch(() => ({}));
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j?.ok) {
     throw new Error(j?.error || "Auth failed");
   }
 }
 
 async function fetchMe(): Promise<MeResponse> {
   const res = await fetch("/api/me", { credentials: "include" });
-  const j = await res.json();
+  const j = await res.json().catch(() => ({}));
   if (!res.ok || !j?.ok) {
     throw new Error(j?.error || "Failed to load profile");
   }

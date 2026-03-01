@@ -15,11 +15,12 @@ enum Rarity {
 }
 
 model User {
-  id          String           @id @default(cuid())
-  tgId        BigInt           @unique
-  username    String?
-  balanceCoin Int              @default(0)
-  createdAt   DateTime         @default(now())
+  id           String   @id @default(cuid())
+  tgId         BigInt   @unique
+  username     String?
+  photoUrl     String?
+  balanceStars Int      @default(0)
+  createdAt    DateTime @default(now())
 
   inventory       Inventory[]
   openings        Opening[]
@@ -28,19 +29,20 @@ model User {
 }
 
 model Case {
-  id          String     @id @default(cuid())
+  id          String  @id @default(cuid())
   title       String
-  priceCoin   Int
-  isFree      Boolean    @default(false)
-  cooldownSec Int        @default(0)
-  isActive    Boolean    @default(true)
+  imageUrl    String?
+  priceStars  Int
+  isFree      Boolean @default(false)
+  cooldownSec Int     @default(0)
+  isActive    Boolean @default(true)
 
   items    CaseItem[]
   openings Opening[]
 }
 
 model CaseItem {
-  id          String   @id @default(cuid())
+  id          String @id @default(cuid())
   caseId      String
   title       String
   rarity      Rarity
@@ -85,7 +87,7 @@ model Payment {
   id               String   @id @default(cuid())
   userId           String
   amountStars      Int
-  coinsAdded       Int
+  starsAdded       Int
   telegramChargeId String   @unique
   createdAt        DateTime @default(now())
 
@@ -98,7 +100,7 @@ model PendingPayment {
   id         String   @id @default(cuid())
   userId     String
   payload    String   @unique
-  coinsToAdd Int
+  starsToAdd Int
   createdAt  DateTime @default(now())
   consumed   Boolean  @default(false)
 

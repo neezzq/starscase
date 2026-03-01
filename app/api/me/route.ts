@@ -15,7 +15,8 @@ export async function GET(req: NextRequest) {
         id: true,
         tgId: true,
         username: true,
-        balanceCoin: true,
+        photoUrl: true,
+        balanceStars: true,
         createdAt: true,
         openings: {
           take: 20,
@@ -38,7 +39,7 @@ export async function GET(req: NextRequest) {
     });
 
     if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
+      return NextResponse.json({ ok: false, error: "USER_NOT_FOUND" }, { status: 404 });
     }
 
     return NextResponse.json({
@@ -47,7 +48,8 @@ export async function GET(req: NextRequest) {
         id: user.id,
         tgId: String(user.tgId),
         username: user.username,
-        balanceCoin: user.balanceCoin,
+        photoUrl: user.photoUrl,
+        balanceStars: user.balanceStars,
         createdAt: user.createdAt,
       },
       openings: user.openings.map((o) => ({

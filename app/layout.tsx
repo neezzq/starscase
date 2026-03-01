@@ -4,8 +4,8 @@ import "./globals.css";
 import Providers from "./providers";
 
 export const metadata: Metadata = {
-  title: "StarsCase",
-  description: "Telegram Mini App — кейсы и SC Coin",
+  title: "KARABAS CASE",
+  description: "Telegram Mini App — KARABAS CASE",
 };
 
 export const viewport: Viewport = {
@@ -21,10 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="ru">
       <head>
         {/* Telegram WebApp JS (в Telegram уже есть, но в браузере полезно) */}
-        <Script
-          src="https://telegram.org/js/telegram-web-app.js"
-          strategy="beforeInteractive"
-        />
+        <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
       </head>
       <body className="min-h-screen">
         <Providers>{children}</Providers>

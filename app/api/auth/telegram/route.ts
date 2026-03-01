@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { verifyInitData } from "@/lib/telegram/verifyInitData";
-import { cookieOptions, signSessionToken } from "@/lib/auth";
+import { cookieOptions, getSessionCookieName, signSessionToken } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,17 +16,22 @@ export async function POST(req: NextRequest) {
     const body = BodySchema.parse(await req.json());
     const botToken = process.env.BOT_TOKEN;
     if (!botToken) {
-      return NextResponse.json({ error: "BOT_TOKEN is missing" }, { status: 500 });
+      return NextResponse.json({ ok: false, error: "BOT_TOKEN is missing" }, { status: 500 });
     }
 
     const verified = verifyInitData(body.initData, botToken);
+
     const tgId = BigInt(verified.user.id);
     const username = verified.user.username ?? null;
+    // Telegram WebApp user может содержать photo_url
+    // (в некоторых клиентах поле может отсутствовать)
+    // @ts-expect-error: runtime field
+    const photoUrl: string | null = (verified.user as any).photo_url ?? null;
 
     const user = await prisma.user.upsert({
       where: { tgId },
-      update: { username },
-      create: { tgId, username },
+      update: { username, photoUrl },
+      create: { tgId, username, photoUrl },
     });
 
     const token = await signSessionToken(user.id);
@@ -37,11 +42,12 @@ export async function POST(req: NextRequest) {
         id: user.id,
         tgId: String(user.tgId),
         username: user.username,
-        balanceCoin: user.balanceCoin,
+        photoUrl: user.photoUrl,
+        balanceStars: user.balanceStars,
       },
     });
 
-    res.cookies.set("sc_session", token, cookieOptions());
+    res.cookies.set(getSessionCookieName(), token, cookieOptions());
     return res;
   } catch (e: any) {
     const msg = typeof e?.message === "string" ? e.message : "Bad Request";

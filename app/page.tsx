@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import ClientShell from "./components/ClientShell";
 import { useAuth } from "./components/AuthProvider";
@@ -8,16 +9,18 @@ import OpeningModal from "./components/OpeningModal";
 type CaseDTO = {
   id: string;
   title: string;
-  priceCoin: number;
+  imageUrl: string | null;
+  priceStars: number;
   isFree: boolean;
   cooldownSec: number;
   isActive: boolean;
+  itemCount: number;
 };
 
 type OpenResult =
   | {
       ok: true;
-      balanceCoin: number;
+      balanceStars: number;
       result: { title: string; rarity: string; rewardType: string; rewardValue: number };
     }
   | {
@@ -46,7 +49,7 @@ export default function Page() {
   const [modalCaseTitle, setModalCaseTitle] = useState("");
   const [modalResult, setModalResult] = useState<OpenResult | null>(null);
 
-  const balance = state.status === "ready" ? state.me.user.balanceCoin : 0;
+  const balance = state.status === "ready" ? state.me.user.balanceStars : 0;
 
   async function loadCases() {
     setLoadingCases(true);
@@ -67,7 +70,9 @@ export default function Page() {
   const canOpen = useMemo(() => {
     const m = new Map<string, boolean>();
     for (const c of cases ?? []) {
-      m.set(c.id, c.isFree || balance >= c.priceCoin);
+      const affordable = c.isFree || balance >= c.priceStars;
+      const hasItems = c.itemCount > 0;
+      m.set(c.id, affordable && hasItems);
     }
     return m;
   }, [cases, balance]);
@@ -87,14 +92,19 @@ export default function Page() {
       });
       const j = (await res.json()) as any;
       if (!res.ok || !j?.ok) {
-        const errRes: OpenResult = { ok: false, error: j?.error || "ERROR", remainingSec: j?.remainingSec, retryAfterMs: j?.retryAfterMs };
+        const errRes: OpenResult = {
+          ok: false,
+          error: j?.error || "ERROR",
+          remainingSec: j?.remainingSec,
+          retryAfterMs: j?.retryAfterMs,
+        };
         setModalStatus("error");
         setModalResult(errRes);
         return;
       }
       const okRes: OpenResult = {
         ok: true,
-        balanceCoin: j.balanceCoin,
+        balanceStars: j.balanceStars,
         result: {
           title: j.result.title,
           rarity: j.result.rarity,
@@ -116,10 +126,12 @@ export default function Page() {
       ? modalResult.error === "COOLDOWN"
         ? `Кулдаун: осталось ${formatCooldown(modalResult.remainingSec ?? 0)}`
         : modalResult.error === "INSUFFICIENT_BALANCE"
-          ? "Недостаточно SC Coin"
-          : modalResult.error === "RATE_LIMIT"
-            ? "Слишком часто. Попробуйте чуть позже."
-            : modalResult.error
+          ? "Недостаточно ⭐"
+          : modalResult.error === "CASE_EMPTY"
+            ? "Кейс пока пустой. Скоро добавим предметы."
+            : modalResult.error === "RATE_LIMIT"
+              ? "Слишком часто. Попробуйте чуть позже."
+              : modalResult.error
       : null;
 
   return (
@@ -127,7 +139,7 @@ export default function Page() {
       <div className="flex items-center justify-between">
         <div className="text-lg font-semibold">Кейсы</div>
         <button
-          className="rounded-xl bg-white/10 px-3 py-2 text-sm font-medium hover:bg-white/15"
+          className="rounded-2xl bg-white/10 px-3 py-2 text-sm font-medium hover:bg-white/15"
           onClick={async () => {
             await loadCases();
             await refresh();
@@ -140,34 +152,57 @@ export default function Page() {
 
       <div className="mt-4 grid gap-3">
         {(cases ?? []).map((c) => {
-          const affordable = canOpen.get(c.id) ?? false;
-          return (
-            <div key={c.id} className="rounded-2xl bg-white/5 p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-base font-semibold">{c.title}</div>
-                  <div className="mt-1 text-sm text-white/70">
-                    {c.isFree ? (
-                      <span className="rounded-lg bg-green-400/10 px-2 py-1 text-green-200">Бесплатный</span>
-                    ) : (
-                      <span className="rounded-lg bg-white/10 px-2 py-1">{c.priceCoin} SC</span>
-                    )}
-                    {c.cooldownSec > 0 && (
-                      <span className="ml-2 text-xs text-white/60">Кулдаун: {formatCooldown(c.cooldownSec)}</span>
-                    )}
-                  </div>
-                </div>
+          const enabled = canOpen.get(c.id) ?? false;
+          const affordable = c.isFree || balance >= c.priceStars;
+          const hasItems = c.itemCount > 0;
 
-                <button
-                  className={
-                    "shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition " +
-                    (affordable ? "bg-white/15 hover:bg-white/20" : "bg-white/5 text-white/40")
-                  }
-                  onClick={() => openCase(c)}
-                  disabled={!affordable}
-                >
-                  Открыть
-                </button>
+          return (
+            <div key={c.id} className="overflow-hidden rounded-3xl bg-white/5">
+              {c.imageUrl && (
+                <div className="relative aspect-[16/9] w-full bg-black/30">
+                  <Image src={c.imageUrl} alt={c.title} fill className="object-contain" priority />
+                </div>
+              )}
+
+              <div className="p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-base font-semibold">{c.title}</div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-white/80">
+                      {c.isFree ? (
+                        <span className="rounded-xl bg-green-400/10 px-3 py-1 text-green-200">Бесплатно</span>
+                      ) : (
+                        <span className="flex items-center gap-2 rounded-xl bg-white/10 px-3 py-1">
+                          <Image src="/assets/star.png" alt="star" width={16} height={16} />
+                          <span className="font-semibold">{c.priceStars}</span>
+                        </span>
+                      )}
+
+                      {!hasItems && (
+                        <span className="rounded-xl bg-white/10 px-3 py-1 text-xs text-white/70">Скоро</span>
+                      )}
+
+                      {!c.isFree && !affordable && (
+                        <span className="rounded-xl bg-red-500/10 px-3 py-1 text-xs text-red-200">Не хватает ⭐</span>
+                      )}
+
+                      {c.cooldownSec > 0 && (
+                        <span className="text-xs text-white/60">Кулдаун: {formatCooldown(c.cooldownSec)}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <button
+                    className={
+                      "shrink-0 rounded-2xl px-4 py-2 text-sm font-semibold transition " +
+                      (enabled ? "bg-white/15 hover:bg-white/20" : "bg-white/5 text-white/40")
+                    }
+                    onClick={() => openCase(c)}
+                    disabled={!enabled}
+                  >
+                    {hasItems ? "Открыть" : "Скоро"}
+                  </button>
+                </div>
               </div>
             </div>
           );

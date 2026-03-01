@@ -1,7 +1,8 @@
 import { SignJWT, jwtVerify } from "jose";
 import type { NextRequest } from "next/server";
 
-const COOKIE_NAME = "sc_session";
+// Session cookie for KARABAS CASE
+const COOKIE_NAME = "kc_session";
 
 function getSecretKey() {
   const secret = process.env.SESSION_SECRET;

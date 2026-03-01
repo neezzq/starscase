@@ -64,9 +64,9 @@ export default function OpeningModal(props: Props) {
                   <div className="mt-2 text-sm text-white/70">
                     Редкость: <b className={rarityColor[props.result.rarity] ?? ""}>{props.result.rarity}</b>
                   </div>
-                  {props.result.rewardType === "COIN" && props.result.rewardValue > 0 && (
+                  {(props.result.rewardType === "STARS" || props.result.rewardType === "COIN") && props.result.rewardValue > 0 && (
                     <div className="mt-2 text-sm text-white/70">
-                      Бонус: <b>+{props.result.rewardValue} SC Coin</b>
+                      Бонус: <b>+{props.result.rewardValue} ⭐</b>
                     </div>
                   )}
                 </motion.div>

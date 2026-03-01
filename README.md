@@ -1,109 +1,55 @@
-# StarsCase — Telegram Mini App (Next.js + Prisma + PostgreSQL + grammY + Stars)
+# KARABAS CASE — Telegram Mini App (Next.js + Prisma + PostgreSQL + grammY + Stars)
 
-Один репозиторий под всё:
-- Telegram Bot (webhook) на **grammY**
-- Telegram Mini App UI внутри **Next.js App Router**
-- Backend API на **Next Route Handlers**
-- **Prisma + PostgreSQL** (Neon/Supabase совместимо)
-- Покупки пакетов **SC Coin** через **Telegram Stars (XTR)**
+Монорепозиторий: Telegram Mini App + Bot webhook в Next.js (Vercel).
 
-## Быстрый старт (локально)
+## Стек
+- TypeScript
+- Next.js (App Router)
+- Prisma + PostgreSQL
+- grammY bot + Webhook через Next Route Handler
+- Telegram Stars (XTR)
 
-1) Установить зависимости:
+## Локальный запуск
 ```bash
 npm i
-```
-
-2) Создать `.env` по примеру:
-```bash
 cp .env.example .env
-```
-
-3) Миграции и сид:
-```bash
+# заполни переменные
 npx prisma migrate dev
 npx prisma db seed
-```
-
-4) Запуск:
-```bash
 npm run dev
 ```
 
-> Важно: Telegram Mini App работает корректно, когда открывается из Telegram через кнопку `web_app`.
-> Для локального теста удобнее деплоить на Vercel preview или использовать HTTPS туннель (ngrok/Cloudflare Tunnel) и поставить webhook на него.
+## .env
+Смотри `.env.example`.
 
 ## Деплой на Vercel
+1) Залей репозиторий на GitHub.
+2) Import в Vercel.
+3) Добавь env vars в Vercel (production):
+   - `BOT_TOKEN`
+   - `DATABASE_URL`
+   - `NEXT_PUBLIC_WEBAPP_URL` (твой домен Vercel)
+   - `SESSION_SECRET`
+   - `TELEGRAM_WEBHOOK_SECRET`
+4) Redeploy.
 
-1) Залей репозиторий на GitHub → импортируй в Vercel.
-
-2) В Vercel добавь ENV:
-- `BOT_TOKEN`
-- `DATABASE_URL`
-- `NEXT_PUBLIC_WEBAPP_URL` (например `https://<your-app>.vercel.app`)
-- `SESSION_SECRET` (случайная строка 32+ символа)
-- `TELEGRAM_WEBHOOK_SECRET` (опционально, но рекомендуется)
-
-3) Prisma:
-- В Vercel обычно достаточно `postinstall` → `prisma generate` уже есть.
-- Миграции делай локально и пушь миграции в репозиторий **или** запускай `prisma migrate deploy` через CI.
-  Для простоты: сделай `npx prisma migrate dev` локально и закоммить папку `prisma/migrations`.
-
-## Установка webhook Telegram
-
-Минимально (как в требовании):
-```
-https://api.telegram.org/bot<BOT_TOKEN>/setWebhook?url=https://<VERCEL_DOMAIN>/api/telegram/webhook
-```
-
-Рекомендуемый вариант с secret token (проверяется заголовок `X-Telegram-Bot-Api-Secret-Token`):
+## Webhook
+Установить webhook:
 ```bash
-curl -X POST "https://api.telegram.org/bot$BOT_TOKEN/setWebhook" \
+curl -X POST "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
   -d "url=https://<VERCEL_DOMAIN>/api/telegram/webhook" \
-  -d "secret_token=$TELEGRAM_WEBHOOK_SECRET"
+  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
 ```
 
-Проверка:
-- Открой `https://<VERCEL_DOMAIN>/api/telegram/webhook` (GET) — должен вернуть `{ ok: true }`.
+Проверить:
+```bash
+curl "https://api.telegram.org/bot<BOT_TOKEN>/getWebhookInfo"
+```
 
-## Настройка Mini App домена в BotFather
+## BotFather: имя и WebApp домен
+- **Переименовать бота**: @BotFather → `mybots` → выбери бота → **Edit Name** → поставь `KARABAS CASE`.
+- **Web App домен**: @BotFather → настройки Web App / Mini App → укажи URL `https://<VERCEL_DOMAIN>`.
 
-Чтобы WebView внутри Telegram открывал твой Mini App:
-1) Открой **@BotFather**
-2) Для твоего бота:
-   - либо команда **/setdomain** → выбери бота → укажи домен (например `your-app.vercel.app`)
-   - дополнительно можно настроить постоянную кнопку: **/setmenubutton** → URL Mini App (`https://...`) и текст кнопки
-3) Если ты создавал Mini App как отдельную сущность (BotFather /newapp), убедись что в настройках Mini App указан актуальный **Web App URL** (HTTPS).
+## Валюта
+Внутренняя валюта Mini App — ⭐ (Stars). Пополнение идёт через Telegram Stars (XTR) 1:1.
 
-## Что внутри
-
-### UI (Mini App)
-- `/` — список кейсов (free + платные), кнопка “Открыть”, анимация открытия
-- `/profile` — баланс + последние 20 открытий + инвентарь
-- `/topup` — выбор пакета → API инициирует invoice в Stars (инвойс приходит в чат с ботом)
-
-### API
-- `POST /api/auth/telegram` — принимает `Telegram.WebApp.initData`, валидирует подпись (HMAC SHA-256), создаёт/обновляет пользователя, ставит HttpOnly cookie с JWT
-- `GET /api/me` — профиль + openings + inventory
-- `GET /api/cases` — список кейсов
-- `POST /api/cases/open` — открытие кейса **строго на сервере**: транзакция Prisma, проверка баланса/кулдауна, взвешенный рандом, запись Opening + Inventory
-- `POST /api/payments/create-invoice` — создаёт PendingPayment и отправляет invoice пользователю через bot API
-- `POST /api/telegram/webhook` — webhook endpoint (Telegram updates → `bot.handleUpdate()`)
-
-## Пакеты SC Coin (Stars)
-
-Пакеты настраиваются в `lib/packs.ts` (coins + stars).
-> Stars invoices требуют `currency="XTR"` и `prices` ровно из **одного** элемента. (Telegram Payments via Stars)
-
-## Примечания по безопасности
-- Все критичные операции на сервере: баланс, рандом, начисления.
-- initData валидируется по алгоритму Telegram WebApps.
-- Дедуп платежей по `telegram_payment_charge_id` (unique).
-- Простое rate-limit ограничение на `/api/cases/open` по `userId + IP`.
-
----
-
-Если нужно — могу:
-- добавить админку для управления кейсами/лутом,
-- сделать красивее UI и анимацию,
-- добавить историю платежей / реферальную систему.
