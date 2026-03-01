@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
 import { api } from "@/lib/api";
@@ -15,6 +16,7 @@ type CaseDto = {
 
 export default function HomePage() {
   const tg = useTelegram();
+  const router = useRouter();
   const [cases, setCases] = useState<CaseDto[]>([]);
   const [qty, setQty] = useState(1);
   const [demo, setDemo] = useState(false);
@@ -45,8 +47,19 @@ export default function HomePage() {
 
   return (
     <div className="p-5">
-      <div className="text-2xl font-semibold mb-1">KARABAS CASE</div>
-      <div className="text-sm opacity-70 mb-5">Кейс стоит 1 ⭐. Можно открыть 1–5 за раз.</div>
+      <div className="flex items-start justify-between gap-3 mb-5">
+        <div>
+          <div className="text-2xl font-semibold mb-1">KARABAS CASE</div>
+          <div className="text-sm opacity-70">Кейс стоит 1 ⭐. Можно открыть 1–5 за раз.</div>
+        </div>
+
+        <button
+          onClick={() => router.push("/topup?open=1")}
+          className="shrink-0 rounded-2xl bg-white/10 border border-white/10 px-4 py-2 text-sm"
+        >
+          Пополнить ⭐
+        </button>
+      </div>
 
       {karabas && (
         <div className="rounded-3xl bg-white/5 border border-white/10 overflow-hidden">
