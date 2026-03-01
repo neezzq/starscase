@@ -1,150 +1,62 @@
 "use client";
 
-import Image from "next/image";
-import { useMemo, useState } from "react";
-import ClientShell from "../components/ClientShell";
-import { useAuth } from "../components/AuthProvider";
+import { useEffect, useMemo, useState } from "react";
+import { useTelegram } from "@/lib/telegram/useTelegram";
+import { api } from "@/lib/api";
 
-type Tab = "STARS" | "GIFTS" | "TON" | "CRYPTOBOT";
-
-function clampInt(v: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, v));
-}
+const PACKS = [
+  { id: "p1", title: "Stars Top Up", stars: 1 },
+  { id: "p50", title: "50 ⭐", stars: 50 },
+  { id: "p100", title: "100 ⭐", stars: 100 },
+];
 
 export default function TopupPage() {
-  const { refresh } = useAuth();
-  const [tab, setTab] = useState<Tab>("STARS");
+  const tg = useTelegram();
+  const [loading, setLoading] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
 
-  const [starsInput, setStarsInput] = useState("1");
-  const starsAmount = useMemo(() => {
-    const n = Number(String(starsInput).replace(/[^0-9]/g, ""));
-    if (!Number.isFinite(n) || n <= 0) return 1;
-    return clampInt(Math.floor(n), 1, 10_000);
-  }, [starsInput]);
+  useEffect(() => {
+    tg.ready();
+    tg.expand();
+  }, [tg]);
 
-  const tonAmount = useMemo(() => {
-    // 1 TON = 100 ⭐
-    return (starsAmount / 100).toFixed(2);
-  }, [starsAmount]);
-
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-
-  async function payStars() {
-    setBusy(true);
-    setMessage(null);
+  const buy = async (packId: string) => {
+    setLoading(true);
+    setNote(null);
     try {
-      const res = await fetch("/api/payments/create-invoice", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ amountStars: starsAmount }),
-      });
-      const j = await res.json();
-      if (!res.ok || !j?.ok) {
-        throw new Error(j?.details || j?.error || "Failed to create invoice");
-      }
-      setMessage("Инвойс отправлен в чат с ботом. Оплати и вернись сюда, затем нажми “Обновить баланс”.");
+      await api.post("/api/payments/create-invoice", { packId });
+      setNote("Инвойс отправлен в чат с ботом. Оплати и вернись сюда — баланс обновится автоматически.");
     } catch (e: any) {
-      setMessage(typeof e?.message === "string" ? e.message : "Ошибка");
+      setNote(e?.message || "Ошибка создания инвойса");
     } finally {
-      setBusy(false);
+      setLoading(false);
     }
-  }
+  };
 
   return (
-    <ClientShell>
-      <div className="text-center text-xs font-semibold tracking-[0.24em] text-white/60">ПОПОЛНЕНИЕ</div>
+    <div className="p-5">
+      <div className="text-xl font-semibold mb-2">Пополнение ⭐</div>
+      <div className="text-sm opacity-70 mb-5">1 ⭐ = 1 ⭐ (внутренняя валюта). После оплаты баланс подтянется автоматически.</div>
 
-      <div className="mt-4 rounded-3xl bg-white/5 p-4">
-        <div className="flex items-center justify-between rounded-2xl bg-white/5 p-2">
-          {["STARS", "GIFTS", "TON", "CRYPTOBOT"].map((k) => {
-            const key = k as Tab;
-            const active = tab === key;
-            return (
-              <button
-                key={k}
-                onClick={() => setTab(key)}
-                className={
-                  "flex-1 rounded-2xl px-2 py-2 text-xs font-semibold transition " +
-                  (active ? "bg-white/10" : "text-white/60 hover:bg-white/5")
-                }
-              >
-                {k}
-              </button>
-            );
-          })}
-        </div>
-
-        {tab === "STARS" && (
-          <div className="mt-5">
-            <div className="text-xs font-semibold tracking-[0.18em] text-white/50">СУММА (STARS)</div>
-
-            <div className="mt-3 flex items-center justify-between rounded-3xl border border-white/10 bg-black/30 px-4 py-4">
-              <input
-                value={starsInput}
-                onChange={(e) => setStarsInput(e.target.value)}
-                inputMode="numeric"
-                className="w-full bg-transparent text-center text-4xl font-bold outline-none"
-              />
-              <Image src="/assets/star.png" alt="star" width={34} height={34} />
-            </div>
-
-            <button
-              className="mt-5 w-full rounded-3xl bg-blue-500/90 px-4 py-4 text-sm font-extrabold uppercase tracking-widest hover:bg-blue-500 disabled:opacity-50"
-              onClick={payStars}
-              disabled={busy}
-            >
-              {busy ? "…" : "Пополнить"}
-            </button>
-
-            {message && <div className="mt-4 rounded-2xl bg-white/5 p-4 text-sm text-white/80">{message}</div>}
-
-            <button
-              className="mt-3 w-full rounded-3xl bg-white/10 px-4 py-3 text-sm font-semibold hover:bg-white/15"
-              onClick={refresh}
-            >
-              Обновить баланс
-            </button>
-          </div>
-        )}
-
-        {tab === "TON" && (
-          <div className="mt-5">
-            <div className="text-xs font-semibold tracking-[0.18em] text-white/50">СУММА (STARS)</div>
-
-            <div className="mt-3 flex items-center justify-between rounded-3xl border border-white/10 bg-black/30 px-4 py-4">
-              <div className="w-full text-center text-4xl font-bold">{starsAmount}</div>
-              <Image src="/assets/star.png" alt="star" width={34} height={34} />
-            </div>
-
-            <div className="mt-4 rounded-3xl bg-white/5 p-4">
-              <div className="text-xs text-white/60">COST</div>
-              <div className="mt-1 flex items-center justify-between">
-                <div className="text-lg font-semibold">{tonAmount}</div>
-                <div className="text-xs text-white/60">TON</div>
-              </div>
-
-              <button
-                className="mt-4 w-full rounded-3xl bg-white/10 px-4 py-3 text-sm font-semibold text-white/70"
-                disabled
-              >
-                Connect Wallet (скоро)
-              </button>
-            </div>
-
-            <div className="mt-3 text-xs text-white/60">
-              Конверсия: <b>1 TON = 100 ⭐</b>. Оплата TON будет добавлена позже.
-            </div>
-          </div>
-        )}
-
-        {(tab === "GIFTS" || tab === "CRYPTOBOT") && (
-          <div className="mt-6 rounded-3xl bg-white/5 p-4 text-sm text-white/70">
-            Этот способ пополнения будет добавлен позже.
-          </div>
-        )}
+      <div className="grid gap-3">
+        {PACKS.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => buy(p.id)}
+            disabled={loading}
+            className="rounded-2xl px-5 py-4 bg-white/5 border border-white/10 active:scale-[0.99] text-left"
+          >
+            <div className="font-medium">{p.title}</div>
+            <div className="text-sm opacity-70">{p.stars} ⭐</div>
+          </button>
+        ))}
       </div>
-    </ClientShell>
+
+      {note && <div className="mt-4 text-sm opacity-80">{note}</div>}
+
+      <div className="mt-8 text-sm opacity-60">
+        Скоро добавим оплату через Crypto Bot и TON Connect.
+      </div>
+    </div>
   );
 }

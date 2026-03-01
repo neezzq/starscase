@@ -1,156 +1,126 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
-import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
-import { getClientIp, requireUserId } from "@/lib/auth";
+import { getSessionUser } from "@/lib/session";
 import { rateLimit } from "@/lib/rateLimit";
+import { pickWeighted } from "@/lib/weighted";
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
-const BodySchema = z.object({
-  caseId: z.string().min(1),
-});
-
-function pickWeighted<T extends { weight: number }>(items: T[]) {
-  const total = items.reduce((sum, it) => sum + Math.max(0, it.weight), 0);
-  if (total <= 0) throw new Error("Case has invalid weights");
-
-  const r = crypto.randomInt(0, total);
-  let acc = 0;
-  for (const it of items) {
-    acc += Math.max(0, it.weight);
-    if (r < acc) return it;
-  }
-  return items[items.length - 1]!;
-}
+type Body = {
+  caseId: string;
+  qty?: number;       // 1..5
+  demo?: boolean;     // demo mode: no balance/inventory changes
+};
 
 export async function POST(req: NextRequest) {
-  try {
-    const userId = await requireUserId(req);
+  const user = await getSessionUser(req);
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const ip = getClientIp(req);
-    const rl = rateLimit(`open:${userId}:${ip}`, { limit: 6, windowMs: 10_000 });
-    if (!rl.ok) {
-      return NextResponse.json({ ok: false, error: "RATE_LIMIT", retryAfterMs: rl.retryAfterMs }, { status: 429 });
-    }
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "0.0.0.0";
+  const rl = rateLimit(`open:${user.id}:${ip}`, 8, 30_000); // 8 opens / 30s
+  if (!rl.ok) return NextResponse.json({ error: "Rate limit" }, { status: 429 });
 
-    const body = BodySchema.parse(await req.json());
-    const now = new Date();
+  const body = (await req.json()) as Body;
+  const qty = Math.max(1, Math.min(5, body.qty ?? 1));
+  const demo = !!body.demo;
 
-    const result = await prisma.$transaction(async (tx) => {
-      const c = await tx.case.findUnique({
-        where: { id: body.caseId },
-        select: {
-          id: true,
-          title: true,
-          priceStars: true,
-          isFree: true,
-          cooldownSec: true,
-          isActive: true,
-          items: { select: { id: true, title: true, rarity: true, weight: true, rewardType: true, rewardValue: true } },
-        },
-      });
-      if (!c || !c.isActive) throw new Error("CASE_NOT_FOUND");
+  const theCase = await prisma.case.findUnique({
+    where: { id: body.caseId },
+    include: { items: true },
+  });
 
-      const lastOpen = await tx.opening.findFirst({
-        where: { userId, caseId: c.id },
+  if (!theCase || !theCase.isActive) {
+    return NextResponse.json({ error: "Case not found" }, { status: 404 });
+  }
+
+  if (!theCase.items.length) {
+    return NextResponse.json({ error: "Case items are not configured yet" }, { status: 400 });
+  }
+
+  // Demo: allow opening without touching DB (except Opening record if you want).
+  // Requirement: demo should be free and NOT show inventory changes.
+  // We'll still record openings with demo=true flag in result payload, but not write to DB to keep it clean.
+  if (demo) {
+    const results = Array.from({ length: qty }).map(() => {
+      const item = pickWeighted(theCase.items, (x) => x.weight);
+      return { title: item.title, rarity: item.rarity, imageUrl: item.imageUrl ?? null };
+    });
+    return NextResponse.json({
+      ok: true,
+      demo: true,
+      spentStars: 0,
+      results,
+    });
+  }
+
+  // Real open: transactional, charges stars, writes opening + inventory
+  const pricePer = theCase.isFree ? 0 : theCase.priceStars;
+  const totalPrice = pricePer * qty;
+
+  const now = new Date();
+
+  const out = await prisma.$transaction(async (tx) => {
+    const dbUser = await tx.user.findUnique({ where: { id: user.id } });
+    if (!dbUser) throw new Error("User not found");
+
+    // Cooldown: for paid cases usually 0; for free could be enforced
+    if (theCase.cooldownSec > 0) {
+      const last = await tx.opening.findFirst({
+        where: { userId: user.id, caseId: theCase.id },
         orderBy: { createdAt: "desc" },
         select: { createdAt: true },
       });
-
-      if (c.cooldownSec > 0 && lastOpen) {
-        const diffSec = Math.floor((now.getTime() - lastOpen.createdAt.getTime()) / 1000);
-        const remaining = c.cooldownSec - diffSec;
-        if (remaining > 0) {
-          const err: any = new Error("COOLDOWN");
-          err.remainingSec = remaining;
-          throw err;
+      if (last) {
+        const nextAt = new Date(last.createdAt.getTime() + theCase.cooldownSec * 1000);
+        if (nextAt > now) {
+          return { error: "Cooldown", cooldownUntil: nextAt.toISOString() } as const;
         }
       }
+    }
 
-      if (!c.items?.length) throw new Error("CASE_EMPTY");
+    if (dbUser.balanceStars < totalPrice) {
+      return { error: "Not enough stars" } as const;
+    }
 
-      // Списываем стоимость (если не free)
-      if (!c.isFree && c.priceStars > 0) {
-        const updated = await tx.user.updateMany({
-          where: { id: userId, balanceStars: { gte: c.priceStars } },
-          data: { balanceStars: { decrement: c.priceStars } },
-        });
-        if (updated.count !== 1) throw new Error("INSUFFICIENT_BALANCE");
-      }
-
-      const item = pickWeighted(c.items);
-
-      await tx.inventory.upsert({
-        where: {
-          user_title_rarity_unique: { userId, title: item.title, rarity: item.rarity },
-        },
-        create: { userId, title: item.title, rarity: item.rarity, qty: 1 },
-        update: { qty: { increment: 1 } },
+    // charge
+    if (totalPrice > 0) {
+      await tx.user.update({
+        where: { id: user.id },
+        data: { balanceStars: { decrement: totalPrice } },
       });
+    }
 
-      // Доп. награда звёздами
-      if ((item.rewardType === "STARS" || item.rewardType === "COIN") && item.rewardValue > 0) {
-        await tx.user.update({
-          where: { id: userId },
-          data: { balanceStars: { increment: item.rewardValue } },
-        });
-      }
+    const results: Array<{ title: string; rarity: any; imageUrl: string | null }> = [];
 
-      const opening = await tx.opening.create({
+    for (let i = 0; i < qty; i++) {
+      const item = pickWeighted(theCase.items, (x) => x.weight);
+      results.push({ title: item.title, rarity: item.rarity, imageUrl: item.imageUrl ?? null });
+
+      await tx.opening.create({
         data: {
-          userId,
-          caseId: c.id,
+          userId: user.id,
+          caseId: theCase.id,
           resultTitle: item.title,
           rarity: item.rarity,
         },
-        select: { id: true, createdAt: true },
       });
 
-      const user = await tx.user.findUnique({
-        where: { id: userId },
-        select: { balanceStars: true },
-      });
-
-      return {
-        case: { id: c.id, title: c.title, priceStars: c.priceStars, isFree: c.isFree, cooldownSec: c.cooldownSec },
-        result: {
-          openingId: opening.id,
-          title: item.title,
-          rarity: item.rarity,
-          rewardType: item.rewardType,
-          rewardValue: item.rewardValue,
-          createdAt: opening.createdAt,
+      // Inventory adds
+      await tx.inventory.upsert({
+        where: {
+          userId_title_rarity: { userId: user.id, title: item.title, rarity: item.rarity },
         },
-        balanceStars: user?.balanceStars ?? 0,
-      };
-    });
-
-    return NextResponse.json({ ok: true, ...result });
-  } catch (e: any) {
-    const msg = typeof e?.message === "string" ? e.message : "ERROR";
-
-    if (msg === "UNAUTHORIZED") {
-      return NextResponse.json({ ok: false, error: "UNAUTHORIZED" }, { status: 401 });
+        update: { qty: { increment: 1 } },
+        create: { userId: user.id, title: item.title, rarity: item.rarity, qty: 1, imageUrl: item.imageUrl ?? null },
+      });
     }
 
-    if (msg === "COOLDOWN") {
-      return NextResponse.json({ ok: false, error: "COOLDOWN", remainingSec: e.remainingSec ?? null }, { status: 429 });
-    }
+    return { results, spentStars: totalPrice } as const;
+  });
 
-    if (msg === "INSUFFICIENT_BALANCE") {
-      return NextResponse.json({ ok: false, error: "INSUFFICIENT_BALANCE" }, { status: 400 });
-    }
-
-    if (msg === "CASE_EMPTY") {
-      return NextResponse.json({ ok: false, error: "CASE_EMPTY" }, { status: 400 });
-    }
-
-    if (msg === "CASE_NOT_FOUND") {
-      return NextResponse.json({ ok: false, error: "CASE_NOT_FOUND" }, { status: 404 });
-    }
-
-    return NextResponse.json({ ok: false, error: msg }, { status: 400 });
+  if ("error" in out) {
+    return NextResponse.json(out, { status: out.error === "Cooldown" ? 429 : 400 });
   }
+
+  return NextResponse.json({ ok: true, demo: false, ...out });
 }
