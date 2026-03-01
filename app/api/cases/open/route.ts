@@ -41,10 +41,10 @@ export async function POST(req: NextRequest) {
   // Requirement: demo should be free and NOT show inventory changes.
   // We'll still record openings with demo=true flag in result payload, but not write to DB to keep it clean.
   if (demo) {
-    const results = Array.from({ length: qty }).map(() => {
-      const item = pickWeighted(theCase.items, (x) => x.weight);
-      return { title: item.title, rarity: item.rarity, imageUrl: item.imageUrl ?? null };
-    });
+   const results = Array.from({ length: qty }).map(() => {
+  const item = pickWeighted(theCase.items, (x) => x.weight);
+  return { title: item.title, rarity: item.rarity };
+});
     return NextResponse.json({
       ok: true,
       demo: true,
