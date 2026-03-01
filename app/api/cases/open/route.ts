@@ -204,7 +204,6 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({
-      ok: true,
       caseId: theCase.id,
       caseTitle: theCase.title,
       qty,
